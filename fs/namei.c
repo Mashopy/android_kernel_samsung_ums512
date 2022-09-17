@@ -39,6 +39,7 @@
 #include <linux/bitops.h>
 #include <linux/init_task.h>
 #include <linux/uaccess.h>
+#include <linux/avc_backtrace.h>
 
 #include "internal.h"
 #include "mount.h"
@@ -315,6 +316,11 @@ static int acl_permission_check(struct inode *inode, int mask)
 	 */
 	if ((mask & ~mode & (MAY_READ | MAY_WRITE | MAY_EXEC)) == 0)
 		return 0;
+#ifdef CONFIG_SECURITY_SELINUX
+	if (avc_backtrace_enable == 1)
+		pr_err("check supplement group domaininfo: pid:%d comm:%s,uid:%d,gid:%d, fileinfo: uid:%d, gid:%d,ino:%d \n",
+		current->pid, current->comm, current_fsuid().val, current_fsgid().val, inode->i_uid.val, inode->i_gid.val, inode->i_ino);
+#endif
 	return -EACCES;
 }
 
@@ -1005,6 +1011,15 @@ int sysctl_protected_symlinks __read_mostly = 0;
 int sysctl_protected_hardlinks __read_mostly = 0;
 int sysctl_protected_fifos __read_mostly;
 int sysctl_protected_regular __read_mostly;
+#if defined(CONFIG_SPRD_DEBUG)
+int sysctl_fs_timeout[] = {
+	500,    /* vfs_open_max_ms */
+	500,    /* vfs_write_max_ms */
+	2000,   /* fs_sync_max_ms */
+	500,	/* io_schedule_max_ms */
+	10,	/* io_interval in seconds */
+};
+#endif
 
 /**
  * may_follow_link - Check symlink following for unsafe situations
@@ -4099,6 +4114,10 @@ retry:
 	if (error)
 		goto exit3;
 	error = vfs_rmdir2(path.mnt, path.dentry->d_inode, dentry);
+#ifdef CONFIG_PROC_DLOG
+	if (!error)
+		dlog_hook_rmdir(dentry, &path);
+#endif
 exit3:
 	dput(dentry);
 exit2:
@@ -4229,6 +4248,10 @@ retry_deleg:
 		if (error)
 			goto exit2;
 		error = vfs_unlink2(path.mnt, path.dentry->d_inode, dentry, &delegated_inode);
+#ifdef CONFIG_PROC_DLOG
+		if (!error)
+			dlog_hook(dentry, inode, &path);
+#endif
 exit2:
 		dput(dentry);
 	}

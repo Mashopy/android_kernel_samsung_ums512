@@ -46,7 +46,11 @@ struct blk_stat_callback;
 struct keyslot_manager;
 
 #define BLKDEV_MIN_RQ	4
-#define BLKDEV_MAX_RQ	128	/* Default maximum */
+#ifdef CONFIG_LARGE_DIRTY_BUFFER
+#define BLKDEV_MAX_RQ	256
+#else
+#define BLKDEV_MAX_RQ  128     /* Default maximum */
+#endif
 
 /* Must be consisitent with blk_mq_poll_stats_bkt() */
 #define BLK_MQ_POLL_STATS_BKTS 16
@@ -210,6 +214,11 @@ struct request {
 	struct request_list *rl;		/* rl this rq is alloced from */
 	unsigned long long start_time_ns;
 	unsigned long long io_start_time_ns;    /* when passed to hardware */
+#endif
+
+#if defined(CONFIG_SPRD_DEBUG)
+	unsigned long long	io_insert_ns;
+	unsigned long long	io_issue_ns;
 #endif
 	/* Number of scatter-gather DMA addr+len pairs after
 	 * physical address coalescing is performed.
@@ -535,6 +544,8 @@ struct request_queue {
 
 	unsigned int		nr_sorted;
 	unsigned int		in_flight[2];
+	unsigned long long	in_flight_time;
+	ktime_t			in_flight_stamp;
 
 	/*
 	 * Number of active block driver functions for which blk_drain_queue()
@@ -581,6 +592,7 @@ struct request_queue {
 	 * for flush operations
 	 */
 	struct blk_flush_queue	*fq;
+	unsigned long		flush_ios;
 
 	struct list_head	requeue_list;
 	spinlock_t		requeue_lock;
@@ -1419,7 +1431,7 @@ extern int blk_verify_command(unsigned char *cmd, fmode_t has_write_perm);
 enum blk_default_limits {
 	BLK_MAX_SEGMENTS	= 128,
 	BLK_SAFE_MAX_SECTORS	= 255,
-	BLK_DEF_MAX_SECTORS	= 2560,
+	BLK_DEF_MAX_SECTORS	= 1024,
 	BLK_MAX_SEGMENT_SIZE	= 65536,
 	BLK_SEG_BOUNDARY_MASK	= 0xFFFFFFFFUL,
 };
@@ -1762,6 +1774,43 @@ int kblockd_schedule_work_on(int cpu, struct work_struct *work);
 int kblockd_schedule_delayed_work(struct delayed_work *dwork, unsigned long delay);
 int kblockd_schedule_delayed_work_on(int cpu, struct delayed_work *dwork, unsigned long delay);
 int kblockd_mod_delayed_work_on(int cpu, struct delayed_work *dwork, unsigned long delay);
+
+#if defined(CONFIG_SPRD_DEBUG)
+static inline void set_io_insert_ns(struct request *req)
+{
+	preempt_disable();
+	req->io_insert_ns = sched_clock();
+	preempt_enable();
+}
+
+static inline void set_io_issue_ns(struct request *req)
+{
+	preempt_disable();
+	req->io_issue_ns = sched_clock();
+	preempt_enable();
+}
+
+static inline uint64_t rq_io_insert_ns(struct request *req)
+{
+	return req->io_insert_ns;
+}
+
+static inline uint64_t rq_io_issue_ns(struct request *req)
+{
+	return req->io_issue_ns;
+}
+
+static inline uint64_t rq_io_ns(struct request *req)
+{
+	uint64_t io_tmp;
+
+	preempt_disable();
+	io_tmp = sched_clock();
+	preempt_enable();
+
+	return io_tmp;
+}
+#endif
 
 #ifdef CONFIG_BLK_CGROUP
 /*

@@ -639,6 +639,9 @@ void elv_drain_elevator(struct request_queue *q)
 
 void __elv_add_request(struct request_queue *q, struct request *rq, int where)
 {
+#if defined(CONFIG_SPRD_DEBUG)
+	set_io_insert_ns(rq);
+#endif
 	trace_block_rq_insert(q, rq);
 
 	blk_pm_add_request(q, rq);
@@ -801,6 +804,8 @@ void elv_completed_request(struct request_queue *q, struct request *rq)
 	 */
 	if (blk_account_rq(rq)) {
 		q->in_flight[rq_is_sync(rq)]--;
+		if (!queue_in_flight(q))
+			q->in_flight_time += ktime_us_delta(ktime_get(), q->in_flight_stamp);
 		if ((rq->rq_flags & RQF_SORTED) &&
 		    e->type->ops.sq.elevator_completed_req_fn)
 			e->type->ops.sq.elevator_completed_req_fn(q, rq);

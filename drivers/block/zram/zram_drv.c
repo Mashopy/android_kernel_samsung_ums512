@@ -41,7 +41,12 @@ static DEFINE_IDR(zram_index_idr);
 static DEFINE_MUTEX(zram_index_mutex);
 
 static int zram_major;
+
+#if IS_ENABLED(CONFIG_CRYPTO_LZ4)
+static const char *default_compressor = "lz4";
+#else
 static const char *default_compressor = "lzo";
+#endif
 
 /* Module params (documentation at end) */
 static unsigned int num_devices = 1;
@@ -1268,12 +1273,17 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
 		kunmap_atomic(dst);
 		zcomp_stream_put(zram->comp);
 	}
+
+	/* Should NEVER happen. BUG() if it does. */
+	if (unlikely(ret)) {
+		pr_err("%s Decompression failed! err=%d, page=%u, len=%u, addr=%lx\n",
+			zram->compressor, ret, index, size, (unsigned long)src);
+		print_hex_dump(KERN_DEBUG, "", DUMP_PREFIX_OFFSET, 16, 1, src, size, 1);
+		BUG();
+	}
+
 	zs_unmap_object(zram->mem_pool, handle);
 	zram_slot_unlock(zram, index);
-
-	/* Should NEVER happen. Return bio error if it does. */
-	if (unlikely(ret))
-		pr_err("Decompression failed! err=%d, page=%u\n", ret, index);
 
 	return ret;
 }
@@ -1877,6 +1887,58 @@ static const struct attribute_group *zram_disk_attr_groups[] = {
 	NULL,
 };
 
+#ifdef CONFIG_E_SHOW_MEM
+static int zram_e_show_mem_cb(int id, void *ptr, void *data)
+{
+	struct zram *zram = (struct zram *)ptr;
+	unsigned long *total_used = data;
+
+	down_read(&zram->init_lock);
+	if (init_done(zram))
+		*total_used += zs_get_total_pages(zram->mem_pool);
+	up_read(&zram->init_lock);
+
+	pr_info("Detail:\n");
+#ifdef CONFIG_64BIT
+	pr_info("        orig: %lu pages,  %lu kB\n",
+		atomic64_read(&zram->stats.pages_stored),
+		(atomic64_read(&zram->stats.pages_stored) << PAGE_SHIFT) / 1024);
+	pr_info("        compressed: %lu kB\n",
+		atomic64_read(&zram->stats.compr_data_size) / 1024);
+#else
+	pr_info("        orig: %llu pages,  %llu kB\n",
+		atomic64_read(&zram->stats.pages_stored),
+		(atomic64_read(&zram->stats.pages_stored) << PAGE_SHIFT) / 1024);
+	pr_info("        compressed: %llu kB\n",
+		atomic64_read(&zram->stats.compr_data_size) / 1024);
+#endif
+
+	return 0;
+}
+
+static int zram_e_show_mem_handler(struct notifier_block *nb,
+				unsigned long val, void *data)
+{
+	unsigned long *used = data;
+	unsigned long total_used = 0;
+
+	pr_info("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n");
+	pr_info("Enhanced Mem-info :ZRAM\n");
+
+	idr_for_each(&zram_index_idr, &zram_e_show_mem_cb, (void *)&total_used);
+	*used += total_used;
+
+	pr_info("Total used:%lu pages, %lu kB\n",
+		total_used, (total_used << PAGE_SHIFT) / 1024);
+
+	return 0;
+}
+
+static struct notifier_block zram_e_show_mem_notifier = {
+	.notifier_call = zram_e_show_mem_handler,
+};
+#endif
+
 /*
  * Allocate and initialize new zram device. the function returns
  * '>= 0' device_id upon success, and negative value otherwise.
@@ -2131,6 +2193,9 @@ static int __init zram_init(void)
 		num_devices--;
 	}
 
+#ifdef CONFIG_E_SHOW_MEM
+	register_e_show_mem_notifier(&zram_e_show_mem_notifier);
+#endif
 	return 0;
 
 out_error:
@@ -2140,6 +2205,9 @@ out_error:
 
 static void __exit zram_exit(void)
 {
+#ifdef CONFIG_E_SHOW_MEM
+	unregister_e_show_mem_notifier(&zram_e_show_mem_notifier);
+#endif
 	destroy_devices();
 }
 

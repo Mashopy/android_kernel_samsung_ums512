@@ -4,7 +4,7 @@
 		soc_thmzone: soc-thmzone{
 			trips {
 				soc_crit: soc_crit {
-					temperature = <110000>;
+					temperature = <120000>;
 					hysteresis = <2000>;
 					type = "critical";
 				};
